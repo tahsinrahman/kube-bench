@@ -493,6 +493,9 @@ groups:
           test_items:
             - flag: --seccomp-default
               path: '{.seccompDefault}'
+              compare:
+                op: eq
+                value: true
         remediation: |
           Set the parameter, either via the --seccomp-default command line parameter or the
           seccompDefault configuration file setting.

@@ -55,10 +55,10 @@ groups:
           kubectl get roles --all-namespaces -o custom-columns=ROLE_NAMESPACE:.metadata.namespace,ROLE_NAME:.metadata.name --no-headers | while read -r role_namespace role_name
           do
             role_rules=$(kubectl get role -n "${role_namespace}" "${role_name}" -o=json | jq -c '.rules')
-            if echo "${role_rules}" | grep -q "\[\"\*\"\]"; then
-              role_is_compliant="false"
-            else
+            if [ "$(echo "${role_rules}" | jq 'any(.[]?; any(.resources[]?, .verbs[]?, .apiGroups[]?; . == "*"))')" = "false" ]; then
               role_is_compliant="true"
+            else
+              role_is_compliant="false"
             fi;
             echo "**role_name: ${role_name} role_namespace: ${role_namespace} role_rules: ${role_rules} role_is_compliant: ${role_is_compliant}"
           done
@@ -67,10 +67,10 @@ groups:
           kubectl get clusterroles -o custom-columns=CLUSTERROLE_NAME:.metadata.name --no-headers | while read -r clusterrole_name
           do
             clusterrole_rules=$(kubectl get clusterrole "${clusterrole_name}" -o=json | jq -c '.rules')
-            if echo "${clusterrole_rules}" | grep -q "\[\"\*\"\]"; then
-              clusterrole_is_compliant="false"
-            else
+            if [ "$(echo "${clusterrole_rules}" | jq 'any(.[]?; any(.resources[]?, .verbs[]?, .apiGroups[]?; . == "*"))')" = "false" ]; then
               clusterrole_is_compliant="true"
+            else
+              clusterrole_is_compliant="false"
             fi;
           echo "**clusterrole_name: ${clusterrole_name} clusterrole_rules: ${clusterrole_rules} clusterrole_is_compliant: ${clusterrole_is_compliant}"
           done
@@ -91,8 +91,8 @@ groups:
         remediation: |
           Where possible replace any use of wildcards ["*"] in roles and clusterroles with specific
           objects or actions.
-          Condition: role_is_compliant is false if ["*"] is found in rules.
-          Condition: clusterrole_is_compliant is false if ["*"] is found in rules.
+          Condition: role_is_compliant is false if "*" is found in the resources, verbs or apiGroups of any rule (or the rules cannot be read).
+          Condition: clusterrole_is_compliant is false if "*" is found in the resources, verbs or apiGroups of any rule (or the rules cannot be read).
         scored: false
 
       - id: 5.1.4
@@ -136,9 +136,7 @@ groups:
             # Retrieve automountServiceAccountToken's value for ServiceAccount and Pod, set to notset if null or <none>.
             svacc_is_automountserviceaccounttoken=$(kubectl get serviceaccount -n "${pod_namespace}" "${pod_service_account}" -o json | jq -r '.automountServiceAccountToken' | sed -e 's/<none>/notset/g' -e 's/null/notset/g')
             pod_is_automountserviceaccounttoken=$(echo "${pod_is_automountserviceaccounttoken}" | sed -e 's/<none>/notset/g' -e 's/null/notset/g')
-            if [ "${svacc_is_automountserviceaccounttoken}" = "false" ] && ( [ "${pod_is_automountserviceaccounttoken}" = "false" ] || [ "${pod_is_automountserviceaccounttoken}" = "notset" ] ); then
-              is_compliant="true"
-            elif [ "${svacc_is_automountserviceaccounttoken}" = "true" ] && [ "${pod_is_automountserviceaccounttoken}" = "false" ]; then
+            if [ "${pod_is_automountserviceaccounttoken}" = "false" ] || ( [ "${pod_is_automountserviceaccounttoken}" = "notset" ] && [ "${svacc_is_automountserviceaccounttoken}" = "false" ] ); then
               is_compliant="true"
             else
               is_compliant="false"
@@ -157,8 +155,8 @@ groups:
           account tokens to disable it, with `automountServiceAccountToken: false`.
           If both the ServiceAccount and the Pod's .spec specify a value for automountServiceAccountToken, the Pod spec takes precedence.
           Condition: Pod is_compliant to true when
-            - ServiceAccount is automountServiceAccountToken: false and Pod is automountServiceAccountToken: false or notset
-            - ServiceAccount is automountServiceAccountToken: true notset and Pod is automountServiceAccountToken: false
+            - Pod is automountServiceAccountToken: false
+            - Pod is automountServiceAccountToken: notset and ServiceAccount is automountServiceAccountToken: false
         scored: false
 
       - id: 5.1.7
@@ -270,8 +268,9 @@ groups:
           kubectl get pods --all-namespaces -o custom-columns=POD_NAME:.metadata.name,POD_NAMESPACE:.metadata.namespace --no-headers | while read -r pod_name pod_namespace
           do
             # Retrieve spec.hostPID for each pod.
-            pod_hostpid=$(kubectl get pod "${pod_name}" --namespace "${pod_namespace}" -o jsonpath='{.spec.hostPID}' 2>/dev/null)
-            if [ -z "${pod_hostpid}" ]; then
+            if ! pod_hostpid=$(kubectl get pod "${pod_name}" --namespace "${pod_namespace}" -o jsonpath='{.spec.hostPID}'); then
+              echo "***pod_name: ${pod_name} pod_namespace: ${pod_namespace} is_pod_hostpid: unknown is_compliant: false"
+            elif [ -z "${pod_hostpid}" ]; then
               pod_hostpid="false"
               echo "***pod_name: ${pod_name} pod_namespace: ${pod_namespace} is_pod_hostpid: ${pod_hostpid} is_compliant: true"
             else
@@ -299,8 +298,9 @@ groups:
           kubectl get pods --all-namespaces -o custom-columns=POD_NAME:.metadata.name,POD_NAMESPACE:.metadata.namespace --no-headers | while read -r pod_name pod_namespace
           do
             # Retrieve spec.hostIPC for each pod.
-            pod_hostipc=$(kubectl get pod "${pod_name}" --namespace "${pod_namespace}" -o jsonpath='{.spec.hostIPC}' 2>/dev/null)
-            if [ -z "${pod_hostipc}" ]; then
+            if ! pod_hostipc=$(kubectl get pod "${pod_name}" --namespace "${pod_namespace}" -o jsonpath='{.spec.hostIPC}'); then
+              echo "***pod_name: ${pod_name} pod_namespace: ${pod_namespace} is_pod_hostipc: unknown is_compliant: false"
+            elif [ -z "${pod_hostipc}" ]; then
               pod_hostipc="false"
               echo "***pod_name: ${pod_name} pod_namespace: ${pod_namespace} is_pod_hostipc: ${pod_hostipc} is_compliant: true"
             else
@@ -328,8 +328,9 @@ groups:
           kubectl get pods --all-namespaces -o custom-columns=POD_NAME:.metadata.name,POD_NAMESPACE:.metadata.namespace --no-headers | while read -r pod_name pod_namespace
           do
             # Retrieve spec.hostNetwork for each pod.
-            pod_hostnetwork=$(kubectl get pod "${pod_name}" --namespace "${pod_namespace}" -o jsonpath='{.spec.hostNetwork}' 2>/dev/null)
-            if [ -z "${pod_hostnetwork}" ]; then
+            if ! pod_hostnetwork=$(kubectl get pod "${pod_name}" --namespace "${pod_namespace}" -o jsonpath='{.spec.hostNetwork}'); then
+              echo "***pod_name: ${pod_name} pod_namespace: ${pod_namespace} is_pod_hostnetwork: unknown is_compliant: false"
+            elif [ -z "${pod_hostnetwork}" ]; then
               pod_hostnetwork="false"
               echo "***pod_name: ${pod_name} pod_namespace: ${pod_namespace} is_pod_hostnetwork: ${pod_hostnetwork} is_compliant: true"
             else
@@ -363,7 +364,7 @@ groups:
               container_name=$(echo ${container} | jq -r '.name')
               # Retrieve container's .securityContext.allowPrivilegeEscalation
               container_allowprivesc=$(echo ${container} | jq -r '.securityContext.allowPrivilegeEscalation' | sed -e 's/null/notset/g')
-              if [ "${container_allowprivesc}" = "false" ] || [ "${container_allowprivesc}" = "notset" ]; then
+              if [ "${container_allowprivesc}" = "false" ]; then
                 echo "***pod_name: ${pod_name} container_name: ${container_name} pod_namespace: ${pod_namespace} is_container_allowprivesc: ${container_allowprivesc} is_compliant: true"
               else
                 echo "***pod_name: ${pod_name} container_name: ${container_name} pod_namespace: ${pod_namespace} is_container_allowprivesc: ${container_allowprivesc} is_compliant: false"
@@ -381,7 +382,7 @@ groups:
           Add policies to each namespace in the cluster which has user workloads to restrict the
           admission of containers with `.securityContext.allowPrivilegeEscalation` set to `true`.
           Audit: the audit retrieves each Pod's container(s) `.securityContext.allowPrivilegeEscalation`.
-          Condition: is_compliant is false if container's `.securityContext.allowPrivilegeEscalation` is set to `true`.
+          Condition: is_compliant is false unless container's `.securityContext.allowPrivilegeEscalation` is explicitly set to `false`.
           Default: If notset, privilege escalation is allowed (default to true). However if PSP/PSA is used with a `restricted` profile,
           privilege escalation is explicitly disallowed unless configured otherwise.
         scored: false
